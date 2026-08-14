@@ -11,6 +11,7 @@ GESTURES = {
     "main_ouverte": "#2A9D8F",
     "peace": "#457B9D",
     "pouce": "#F4A261",
+    "neutre": "#6C757D",
 }
 
 for name, color in GESTURES.items():
