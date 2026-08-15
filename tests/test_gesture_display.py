@@ -18,6 +18,19 @@ import cv2
 import gesture_display as gd
 
 
+class FakeClock:
+    """Horloge manuelle pour tester GestureDebouncer sans vraies attentes."""
+
+    def __init__(self, start: float = 0.0):
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def make_result(category_name=None, has_hand=True):
     """Construit un faux GestureRecognizerResult minimal pour les tests.
 
@@ -89,47 +102,52 @@ class TestGestureDebouncer:
         deb = gd.GestureDebouncer()
         assert deb.current == gd.NEUTRAL_GESTURE
 
-    def test_does_not_switch_before_threshold(self):
-        deb = gd.GestureDebouncer(debounce_frames=4)
-        for _ in range(3):
-            current = deb.update("poing")
+    def test_does_not_switch_before_hold_duration_elapsed(self):
+        clock = FakeClock()
+        deb = gd.GestureDebouncer(hold_seconds=1.0, clock=clock)
+        deb.update("poing")
+        clock.advance(0.9)
+        current = deb.update("poing")
         assert current == gd.NEUTRAL_GESTURE
 
-    def test_switches_once_threshold_reached(self):
-        deb = gd.GestureDebouncer(debounce_frames=4)
-        for _ in range(4):
-            current = deb.update("poing")
+    def test_switches_once_hold_duration_elapsed(self):
+        clock = FakeClock()
+        deb = gd.GestureDebouncer(hold_seconds=1.0, clock=clock)
+        deb.update("poing")
+        clock.advance(1.0)
+        current = deb.update("poing")
         assert current == "poing"
 
-    def test_interrupted_streak_resets_the_counter(self):
-        deb = gd.GestureDebouncer(debounce_frames=4)
+    def test_switching_target_resets_the_hold_timer(self):
+        clock = FakeClock()
+        deb = gd.GestureDebouncer(hold_seconds=1.0, clock=clock)
         deb.update("poing")
-        deb.update("poing")
-        deb.update("peace")  # casse la série de "poing"
-        deb.update("poing")
-        deb.update("poing")
-        # seulement 2 "poing" consécutifs depuis l'interruption : pas assez
+        clock.advance(0.9)
+        deb.update("peace")  # coupe la tenue de "poing" avant le seuil
+        clock.advance(0.9)
+        deb.update("poing")  # repart de zéro, encore 0.9s < 1.0s
         assert deb.current == gd.NEUTRAL_GESTURE
 
     def test_missing_hand_eventually_falls_back_to_neutral(self):
-        deb = gd.GestureDebouncer(debounce_frames=2)
+        clock = FakeClock()
+        deb = gd.GestureDebouncer(hold_seconds=0.5, clock=clock)
         deb.update("poing")
-        deb.update("poing")
-        assert deb.current == "poing"
+        clock.advance(0.5)
+        assert deb.update("poing") == "poing"
         deb.update(None)
-        deb.update(None)
-        assert deb.current == gd.NEUTRAL_GESTURE
+        clock.advance(0.5)
+        assert deb.update(None) == gd.NEUTRAL_GESTURE
 
-    def test_single_flicker_frame_does_not_reset_current(self):
-        """Un seul frame ambigu au milieu d'un geste stable ne doit pas
-        faire retomber l'affichage tant que le nouveau target n'a pas
-        lui-même atteint le seuil de debounce."""
-        deb = gd.GestureDebouncer(debounce_frames=3)
+    def test_short_interruption_does_not_immediately_revert_current(self):
+        """Une brève interruption ne doit pas faire retomber l'affichage
+        tant que le nouveau candidat n'a pas lui-même tenu `hold_seconds`."""
+        clock = FakeClock()
+        deb = gd.GestureDebouncer(hold_seconds=1.0, clock=clock)
         deb.update("poing")
-        deb.update("poing")
-        deb.update("poing")
-        assert deb.current == "poing"
-        deb.update(None)  # 1 frame de flicker (pending_count repart à 1)
+        clock.advance(1.0)
+        assert deb.update("poing") == "poing"
+        clock.advance(0.1)
+        deb.update(None)  # interruption de 0.1s seulement
         assert deb.current == "poing"
 
 

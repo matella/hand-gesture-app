@@ -36,7 +36,12 @@ from mediapipe.tasks.python.vision.drawing_utils import draw_landmarks
 # Résolu par rapport à l'emplacement du script, pas au dossier d'exécution.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-DEBOUNCE_FRAMES = 4  # nb de frames consécutives identiques avant de changer l'image affichée
+
+# Durée (en secondes) pendant laquelle un geste doit être tenu sans
+# interruption avant que l'image affichée ne change. Basé sur le temps réel
+# plutôt qu'un nombre de frames, pour un ressenti constant quel que soit le
+# framerate de la webcam.
+DEFAULT_HOLD_SECONDS = 1.0
 
 # Score de confiance minimum (0-1) pour qu'un geste soit retenu plutôt que de
 # retomber sur "neutre". Plus bas = reconnaît des gestes moins "parfaits"
@@ -125,33 +130,47 @@ def resolve_gesture(result) -> str | None:
 
 class GestureDebouncer:
     """Stabilise le geste affiché : ne bascule sur un nouveau geste (ou sur
-    le neutre) que lorsqu'il est observé sur `debounce_frames` frames
-    consécutives, pour éviter le flicker sur une détection instable.
+    le neutre) que lorsqu'il est tenu sans interruption pendant au moins
+    `hold_seconds`, pour éviter le flicker sur une détection instable et
+    donner un vrai temps de "maintien" avant le changement d'image.
+
+    `clock` est injectable (signature `() -> float`) pour pouvoir tester le
+    minutage sans vraies attentes.
     """
 
-    def __init__(self, debounce_frames: int = DEBOUNCE_FRAMES, neutral: str = NEUTRAL_GESTURE):
-        self.debounce_frames = debounce_frames
+    def __init__(
+        self,
+        hold_seconds: float = DEFAULT_HOLD_SECONDS,
+        neutral: str = NEUTRAL_GESTURE,
+        clock=time.monotonic,
+    ):
+        self.hold_seconds = hold_seconds
         self.neutral = neutral
+        self.clock = clock
         self.current = neutral
         self._pending = neutral
-        self._pending_count = 0
+        self._pending_since = clock()
 
     def update(self, gesture: str | None) -> str:
         """Prend le geste détecté sur la frame courante (None = pas de main
         détectée ou geste non reconnu) et retourne le geste stabilisé."""
         target = gesture or self.neutral
-        if target == self._pending:
-            self._pending_count += 1
-        else:
-            self._pending = target
-            self._pending_count = 1
+        now = self.clock()
 
-        if self._pending_count >= self.debounce_frames:
+        if target != self._pending:
+            self._pending = target
+            self._pending_since = now
+
+        if now - self._pending_since >= self.hold_seconds:
             self.current = target
         return self.current
 
 
-def main(camera_index: int = 0, gesture_threshold: float = DEFAULT_GESTURE_THRESHOLD):
+def main(
+    camera_index: int = 0,
+    gesture_threshold: float = DEFAULT_GESTURE_THRESHOLD,
+    hold_seconds: float = DEFAULT_HOLD_SECONDS,
+):
     ensure_model()
 
     cap = cv2.VideoCapture(camera_index)
@@ -177,7 +196,7 @@ def main(camera_index: int = 0, gesture_threshold: float = DEFAULT_GESTURE_THRES
     )
 
     start_time = time.monotonic()
-    debouncer = GestureDebouncer()
+    debouncer = GestureDebouncer(hold_seconds=hold_seconds)
 
     with vision.GestureRecognizer.create_from_options(options) as recognizer:
         while True:
@@ -236,5 +255,18 @@ if __name__ == "__main__":
             f"(défaut : {DEFAULT_GESTURE_THRESHOLD}). Plus bas = plus tolérant."
         ),
     )
+    parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        default=DEFAULT_HOLD_SECONDS,
+        help=(
+            "Durée (en secondes) pendant laquelle un geste doit être tenu "
+            f"avant de changer l'image affichée (défaut : {DEFAULT_HOLD_SECONDS})."
+        ),
+    )
     args = parser.parse_args()
-    main(camera_index=args.camera, gesture_threshold=args.gesture_threshold)
+    main(
+        camera_index=args.camera,
+        gesture_threshold=args.gesture_threshold,
+        hold_seconds=args.hold_seconds,
+    )

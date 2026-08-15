@@ -27,6 +27,13 @@ python gesture_display.py
 - Fenêtre **Image** : image correspondant au geste détecté (à capturer dans OBS).
 - Touche `q` pour quitter.
 
+Un geste doit être tenu environ 1 seconde avant que l'image change (évite le
+flicker sur une détection instable). Ajustable :
+
+```bash
+python gesture_display.py --hold-seconds 0.3
+```
+
 Si les gestes doivent être trop "parfaits" pour être reconnus, baisse le seuil
 de confiance (défaut 0.5) :
 
