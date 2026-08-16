@@ -31,21 +31,25 @@ class FakeClock:
         self.now += seconds
 
 
-def make_result(category_name=None, has_hand=True):
-    """Construit un faux GestureRecognizerResult minimal pour les tests.
+def make_result(*category_names, has_hand=True):
+    """Construit un faux GestureRecognizerResult avec une main par nom de
+    catégorie fourni (ordre = ordre de détection MediaPipe simulé).
 
-    `category_name=None` simule une frame sans main détectée.
+    Sans argument : simule une frame sans main détectée (`has_hand=False`)
+    ou une main détectée sans geste scoré (`has_hand=True`, comportement
+    par défaut).
     """
-    if category_name is None:
+    if not category_names:
         return types.SimpleNamespace(
             gestures=[],
             hand_landmarks=[[types.SimpleNamespace(x=0.5, y=0.5)]] if has_hand else [],
         )
-    category = types.SimpleNamespace(category_name=category_name)
-    return types.SimpleNamespace(
-        gestures=[[category]],
-        hand_landmarks=[[types.SimpleNamespace(x=0.5, y=0.5)]],
-    )
+    gestures = []
+    hand_landmarks = []
+    for name in category_names:
+        hand_landmarks.append([types.SimpleNamespace(x=0.5, y=0.5)])
+        gestures.append([types.SimpleNamespace(category_name=name)] if name else [])
+    return types.SimpleNamespace(gestures=gestures, hand_landmarks=hand_landmarks)
 
 
 # --- specs/01-gesture-recognition.md ---------------------------------------
@@ -80,6 +84,20 @@ class TestResolveGesture:
         # proche visuellement de Closed_Fist pour avoir sa propre image.
         assert gd.resolve_gesture(make_result(category_name)) is None
 
+    # --- specs/07-multi-hand-detection.md ---
+
+    def test_first_hand_with_mapped_gesture_wins(self):
+        result = make_result("Victory", "Closed_Fist")
+        assert gd.resolve_gesture(result) == "peace"
+
+    def test_falls_through_to_second_hand_when_first_is_unmapped(self):
+        result = make_result("Thumb_Down", "Closed_Fist")
+        assert gd.resolve_gesture(result) == "poing"
+
+    def test_both_hands_unmapped_returns_none(self):
+        result = make_result("Thumb_Down", "ILoveYou")
+        assert gd.resolve_gesture(result) is None
+
 
 class TestGestureLabelsConsistency:
     """Garde-fou de config : toute entrée de GESTURE_LABELS doit pointer
@@ -92,6 +110,68 @@ class TestGestureLabelsConsistency:
 
     def test_neutral_gesture_has_an_image_entry(self):
         assert gd.NEUTRAL_GESTURE in gd.GESTURE_IMAGES
+
+    def test_every_expression_key_has_an_image_entry(self):
+        for expression_key in gd.EXPRESSION_KEYS:
+            assert expression_key in gd.GESTURE_IMAGES
+
+
+# --- specs/08-facial-expression-detection.md --------------------------------
+
+
+def make_face_result(**scores):
+    """Construit un faux FaceLandmarkerResult à partir de scores de
+    blendshapes nommés (ex: make_face_result(jawOpen=0.9)). Les blendshapes
+    non précisés valent 0. Sans argument : simule un visage détecté mais
+    neutre (aucune expression active).
+    """
+    categories = [
+        types.SimpleNamespace(category_name=name, score=score)
+        for name, score in scores.items()
+    ]
+    return types.SimpleNamespace(face_blendshapes=[categories])
+
+
+def make_no_face_result():
+    return types.SimpleNamespace(face_blendshapes=[])
+
+
+class TestResolveExpression:
+    def test_no_face_returns_none(self):
+        assert gd.resolve_expression(make_no_face_result()) is None
+
+    def test_neutral_face_returns_none(self):
+        assert gd.resolve_expression(make_face_result()) is None
+
+    def test_mouth_open_maps_to_surprise(self):
+        result = make_face_result(jawOpen=0.9)
+        assert gd.resolve_expression(result) == "surprise"
+
+    def test_smile_maps_to_smile(self):
+        result = make_face_result(mouthSmileLeft=0.8, mouthSmileRight=0.8)
+        assert gd.resolve_expression(result) == "smile"
+
+    def test_asymmetric_eye_blink_maps_to_wink(self):
+        result = make_face_result(eyeBlinkLeft=0.9, eyeBlinkRight=0.05)
+        assert gd.resolve_expression(result) == "wink"
+
+    def test_symmetric_blink_does_not_map_to_wink(self):
+        # Un clignement des deux yeux à la fois n'est pas un wink.
+        result = make_face_result(eyeBlinkLeft=0.9, eyeBlinkRight=0.85)
+        assert gd.resolve_expression(result) is None
+
+    def test_raised_eyebrows_maps_to_eyebrows(self):
+        result = make_face_result(
+            browInnerUp=0.7, browOuterUpLeft=0.6, browOuterUpRight=0.6
+        )
+        assert gd.resolve_expression(result) == "eyebrows"
+
+    def test_mouth_open_takes_priority_over_smile(self):
+        # surprise est vérifié avant smile dans l'ordre de priorité.
+        result = make_face_result(
+            jawOpen=0.9, mouthSmileLeft=0.8, mouthSmileRight=0.8
+        )
+        assert gd.resolve_expression(result) == "surprise"
 
 
 # --- specs/02-idle-neutral-state.md -----------------------------------------

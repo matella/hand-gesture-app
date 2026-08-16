@@ -17,7 +17,9 @@ trained vocabulary of 8 categories: `None`, `Closed_Fist`, `Open_Palm`,
 
 ## Requirements
 
-1. The system SHALL classify at most one hand per frame (`num_hands=1`).
+1. The system SHALL classify up to two hands per frame (`num_hands=2`) — see
+   [07-multi-hand-detection.md](07-multi-hand-detection.md) for how a single
+   displayed gesture is chosen when more than one hand is present.
 2. The system SHALL map recognized categories to internal gesture keys via
    `GESTURE_LABELS`:
    - `Closed_Fist` → `poing`

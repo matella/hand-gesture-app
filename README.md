@@ -1,10 +1,11 @@
 # hand-gesture-image
 
-Petite app Python qui capture le flux webcam, détecte la main via le modèle
-pré-entraîné [MediaPipe GestureRecognizer](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer),
-reconnaît un geste simple (poing, main ouverte, peace, pouce) et affiche une
-image correspondante dans une fenêtre séparée — idéal à capturer dans OBS via
-une *Window Capture* sur la fenêtre "Image".
+Petite app Python qui capture le flux webcam, détecte jusqu'à deux mains via
+le modèle pré-entraîné [MediaPipe GestureRecognizer](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer)
+et des expressions du visage via [MediaPipe FaceLandmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker),
+reconnaît un geste ou une expression simple et affiche une image
+correspondante dans une fenêtre séparée — idéal à capturer dans OBS via une
+*Window Capture* sur la fenêtre "Image".
 
 Inspiré d'un reel Instagram montrant ce type d'effet en temps réel.
 
@@ -15,7 +16,8 @@ pip install -r requirements.txt
 ```
 
 Testé avec Python 3.13. Au premier lancement, le script télécharge
-automatiquement le modèle MediaPipe GestureRecognizer (~8 Mo) dans `models/`.
+automatiquement les modèles MediaPipe GestureRecognizer (~8 Mo) et
+FaceLandmarker (~4 Mo) dans `models/`.
 
 ## Utilisation
 
@@ -23,9 +25,14 @@ automatiquement le modèle MediaPipe GestureRecognizer (~8 Mo) dans `models/`.
 python gesture_display.py
 ```
 
-- Fenêtre **Camera** : flux webcam avec les points de la main dessinés.
+- Fenêtre **Camera** : flux webcam avec les points de chaque main détectée
+  (jusqu'à deux) dessinés.
 - Fenêtre **Image** : image correspondant au geste détecté (à capturer dans OBS).
 - Touche `q` pour quitter.
+
+Les deux mains sont suivies indépendamment : n'importe laquelle peut
+déclencher un geste. Si les deux mains font un geste reconnu en même temps,
+une seule image s'affiche (pas de logique de "combo").
 
 Un geste doit être tenu environ 1 seconde avant que l'image change (évite le
 flicker sur une détection instable). Ajustable :
@@ -77,6 +84,23 @@ deux), et il n'existe pas de catégorie "shaka" dédiée. Un poing mal reconnu
 comme `Thumb_Down` retombe donc sur `neutre` plutôt que d'afficher une image
 qui ne correspond pas au geste fait. `assets/swag.gif` (signe shaka) reste
 disponible mais n'est câblé à rien.
+
+## Expressions faciales reconnues
+
+En plus des mains, MediaPipe FaceLandmarker détecte quelques expressions du
+visage (ordre de priorité entre elles ci-dessous — la première qui matche
+gagne) :
+
+| Expression | Déclenchée par |
+|---|---|
+| `surprise` | Bouche ouverte |
+| `smile` | Sourire |
+| `wink` | Clin d'œil (un seul œil fermé) |
+| `eyebrows` | Sourcils levés |
+
+**Les mains ont priorité sur le visage** : si tu fais un geste de la main
+reconnu en même temps qu'une expression faciale, c'est l'image du geste qui
+s'affiche.
 
 ## Développement
 

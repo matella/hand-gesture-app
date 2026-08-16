@@ -54,12 +54,34 @@ MODEL_URL = (
     "gesture_recognizer/float16/latest/gesture_recognizer.task"
 )
 
+FACE_MODEL_PATH = os.path.join(BASE_DIR, "models", "face_landmarker.task")
+FACE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task"
+)
+
+# Seuils (0-1) des scores de blendshapes MediaPipe au-delà desquels une
+# expression faciale est considérée active. Voir specs/08.
+MOUTH_OPEN_THRESHOLD = 0.5
+SMILE_THRESHOLD = 0.5
+WINK_CLOSED_THRESHOLD = 0.5
+WINK_OPEN_THRESHOLD = 0.3
+EYEBROWS_THRESHOLD = 0.4
+
+# Clés d'expression faciale (voir resolve_expression) devant chacune avoir
+# une entrée dans GESTURE_IMAGES.
+EXPRESSION_KEYS = ["surprise", "smile", "wink", "eyebrows"]
+
 GESTURE_IMAGES = {
     "poing": os.path.join(ASSETS_DIR, "fist.gif"),
     "main_ouverte": os.path.join(ASSETS_DIR, "main_ouverte.png"),
     "peace": os.path.join(ASSETS_DIR, "peace.png"),
     "pouce": os.path.join(ASSETS_DIR, "pouce.png"),
     "shush": os.path.join(ASSETS_DIR, "shush.gif"),
+    "surprise": os.path.join(ASSETS_DIR, "surprise.png"),
+    "smile": os.path.join(ASSETS_DIR, "smile.png"),
+    "wink": os.path.join(ASSETS_DIR, "wink.png"),
+    "eyebrows": os.path.join(ASSETS_DIR, "eyebrows.png"),
     "neutre": os.path.join(ASSETS_DIR, "default.jpg"),
 }
 
@@ -118,14 +140,61 @@ def load_overlays(gesture_images: dict) -> dict:
 def resolve_gesture(result) -> str | None:
     """Retourne la clé GESTURE_IMAGES du geste détecté sur cette frame.
 
-    Retourne None si aucune main n'est détectée, ou si le geste reconnu par
-    GestureRecognizer n'a pas d'entrée dans GESTURE_LABELS (ex: Thumb_Down,
-    ILoveYou, ou "None").
+    Jusqu'à deux mains peuvent être détectées (cf. specs/07) : chacune est
+    examinée dans l'ordre renvoyé par MediaPipe, et la première dont le
+    geste a une entrée dans GESTURE_LABELS gagne — une première main dont le
+    geste n'est pas mappé (ex: Thumb_Down) n'empêche pas la seconde de
+    déclencher un affichage. Retourne None si aucune main n'a de geste mappé
+    (y compris si aucune main n'est détectée du tout).
     """
-    if not result.gestures or not result.hand_landmarks:
+    for hand_gestures in result.gestures:
+        if not hand_gestures:
+            continue
+        mapped = GESTURE_LABELS.get(hand_gestures[0].category_name)
+        if mapped:
+            return mapped
+    return None
+
+
+def resolve_expression(result) -> str | None:
+    """Retourne la clé GESTURE_IMAGES de l'expression faciale détectée sur
+    cette frame, à partir d'un FaceLandmarkerResult (avec
+    output_face_blendshapes=True).
+
+    Contrairement aux gestes de la main, les blendshapes sont des scores
+    continus (0-1) par mouvement du visage, pas une catégorie unique déjà
+    classifiée : chaque expression est donc définie par une règle de seuil,
+    évaluée dans un ordre de priorité fixe (voir specs/08). Retourne None si
+    aucun visage n'est détecté ou qu'aucune règle ne matche.
+    """
+    if not result.face_blendshapes:
         return None
-    top_gesture = result.gestures[0][0].category_name
-    return GESTURE_LABELS.get(top_gesture)
+    scores = {c.category_name: c.score for c in result.face_blendshapes[0]}
+
+    if scores.get("jawOpen", 0.0) >= MOUTH_OPEN_THRESHOLD:
+        return "surprise"
+
+    smile = (scores.get("mouthSmileLeft", 0.0) + scores.get("mouthSmileRight", 0.0)) / 2
+    if smile >= SMILE_THRESHOLD:
+        return "smile"
+
+    blink_left = scores.get("eyeBlinkLeft", 0.0)
+    blink_right = scores.get("eyeBlinkRight", 0.0)
+    winking = (
+        blink_left >= WINK_CLOSED_THRESHOLD and blink_right < WINK_OPEN_THRESHOLD
+    ) or (blink_right >= WINK_CLOSED_THRESHOLD and blink_left < WINK_OPEN_THRESHOLD)
+    if winking:
+        return "wink"
+
+    eyebrows = (
+        scores.get("browInnerUp", 0.0)
+        + scores.get("browOuterUpLeft", 0.0)
+        + scores.get("browOuterUpRight", 0.0)
+    ) / 3
+    if eyebrows >= EYEBROWS_THRESHOLD:
+        return "eyebrows"
+
+    return None
 
 
 class GestureDebouncer:
@@ -172,6 +241,7 @@ def main(
     hold_seconds: float = DEFAULT_HOLD_SECONDS,
 ):
     ensure_model()
+    ensure_model(model_path=FACE_MODEL_PATH, model_url=FACE_MODEL_URL)
 
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
@@ -187,18 +257,25 @@ def main(
     options = vision.GestureRecognizerOptions(
         base_options=BaseOptions(model_asset_path=MODEL_PATH),
         running_mode=vision.RunningMode.VIDEO,
-        num_hands=1,
+        num_hands=2,
         min_hand_detection_confidence=0.7,
         min_tracking_confidence=0.6,
         canned_gesture_classifier_options=ClassifierOptions(
             score_threshold=gesture_threshold
         ),
     )
+    face_options = vision.FaceLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=FACE_MODEL_PATH),
+        running_mode=vision.RunningMode.VIDEO,
+        num_faces=1,
+        output_face_blendshapes=True,
+    )
 
     start_time = time.monotonic()
     debouncer = GestureDebouncer(hold_seconds=hold_seconds)
 
-    with vision.GestureRecognizer.create_from_options(options) as recognizer:
+    with vision.GestureRecognizer.create_from_options(options) as recognizer, \
+            vision.FaceLandmarker.create_from_options(face_options) as face_landmarker:
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -209,10 +286,12 @@ def main(
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             timestamp_ms = int((time.monotonic() - start_time) * 1000)
             result = recognizer.recognize_for_video(mp_image, timestamp_ms)
+            face_result = face_landmarker.detect_for_video(mp_image, timestamp_ms)
 
-            gesture = resolve_gesture(result)
-            if result.gestures and result.hand_landmarks:
-                draw_landmarks(frame, result.hand_landmarks[0], HAND_CONNECTIONS)
+            # Les mains ont priorité sur le visage (cf. specs/08).
+            gesture = resolve_gesture(result) or resolve_expression(face_result)
+            for hand_landmarks in result.hand_landmarks:
+                draw_landmarks(frame, hand_landmarks, HAND_CONNECTIONS)
 
             current_gesture = debouncer.update(gesture)
 

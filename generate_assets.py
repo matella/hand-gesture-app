@@ -11,6 +11,10 @@ GESTURES = {
     "main_ouverte": "#2A9D8F",
     "peace": "#457B9D",
     "pouce": "#F4A261",
+    "surprise": "#9D4EDD",
+    "smile": "#FFD166",
+    "wink": "#06D6A0",
+    "eyebrows": "#EF476F",
     "neutre": "#6C757D",
 }
 
